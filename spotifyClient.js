@@ -5,68 +5,104 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const {
-  SPOTIFY_CLIENT_ID: CLIENT_ID,
-  SPOTIFY_CLIENT_SECRET: CLIENT_SECRET,
+  SPOTIFY_CLIENT_ID,
+  SPOTIFY_CLIENT_SECRET,
+  SPOTIFY_REDIRECT_URI,
 } = process.env;
 
-if (!CLIENT_ID || !CLIENT_SECRET) {
-  throw new Error("Missing SPOTIFY_CLIENT_ID or SPOTIFY_CLIENT_SECRET in .env");
+if (!SPOTIFY_CLIENT_ID || !SPOTIFY_CLIENT_SECRET || !SPOTIFY_REDIRECT_URI) {
+  throw new Error(
+    "Fehlende SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET / SPOTIFY_REDIRECT_URI in .env"
+  );
 }
 
-let cachedToken = null;
-let cachedTokenExpiresAt = 0; // unix ms
+export function getAuthUrl() {
+  const scopes = ["user-library-read"];
+  const params = new URLSearchParams({
+    client_id: SPOTIFY_CLIENT_ID,
+    response_type: "code",
+    redirect_uri: SPOTIFY_REDIRECT_URI,
+    scope: scopes.join(" "),
+  });
 
-async function getAccessToken() {
-  const now = Date.now();
-  if (cachedToken && now < cachedTokenExpiresAt) {
-    return cachedToken;
-  }
+  return `https://accounts.spotify.com/authorize?${params.toString()}`;
+}
 
-  const authHeader = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString(
-    "base64"
-  );
+export async function exchangeCodeForToken(code) {
+  const body = new URLSearchParams({
+    grant_type: "authorization_code",
+    code,
+    redirect_uri: SPOTIFY_REDIRECT_URI,
+  }).toString();
 
   const res = await axios.post(
     "https://accounts.spotify.com/api/token",
-    new URLSearchParams({ grant_type: "client_credentials" }).toString(),
+    body,
     {
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
-        Authorization: `Basic ${authHeader}`,
+        Authorization:
+          "Basic " +
+          Buffer.from(
+            `${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`
+          ).toString("base64"),
       },
     }
   );
 
-  cachedToken = res.data.access_token;
-  // expires_in is in seconds
-  cachedTokenExpiresAt = now + (res.data.expires_in - 60) * 1000; // 60s safety margin
-
-  return cachedToken;
+  return {
+    accessToken: res.data.access_token,
+    refreshToken: res.data.refresh_token,
+    expiresIn: res.data.expires_in,
+  };
 }
 
-export async function spotifyGet(path, params = {}) {
-  const token = await getAccessToken();
+export async function fetchAllLikedTracks(accessToken) {
+  let url = "https://api.spotify.com/v1/me/tracks?limit=50";
+  const all = [];
 
-  const res = await axios.get(`https://api.spotify.com/v1${path}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-    params,
-  });
+  while (url) {
+    const res = await axios.get(url, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
 
-  return res.data;
+    const data = res.data;
+    const items = data.items || [];
+
+    for (const item of items) {
+      if (item.track) {
+        all.push(item.track);
+      }
+    }
+
+    url = data.next;
+  }
+
+  return all;
 }
 
-// convenience example helpers:
+export async function unlikeTracks(accessToken, trackIds = []) {
+  if (trackIds.length === 0) return;
 
-export async function searchTrack(query, limit = 3) {
-  return spotifyGet("/search", {
-    q: query,
-    type: "track",
-    limit,
-  });
-}
+  const chunks = [];
+  while (trackIds.length > 0) {
+    chunks.push(trackIds.splice(0, 50));
+  }
 
-export async function getArtist(artistId) {
-  return spotifyGet(`/artists/${artistId}`);
+  for (const chunk of chunks) {
+    await axios.delete(
+      "https://api.spotify.com/v1/me/tracks",
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json"
+        },
+        params: {
+          ids: chunk.join(",")
+        }
+      }
+    );
+  }
 }

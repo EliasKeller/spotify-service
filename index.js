@@ -1,52 +1,63 @@
 // index.js
-import { searchTrack, getArtist } from "./spotifyClient.js";
+import express from "express";
+import {
+  getAuthUrl,
+  exchangeCodeForToken,
+  fetchAllLikedTracks,
+} from "./spotifyClient.js";
 
-async function main() {
-  try {
-    console.log("1) Searching for tracks: 'Rammstein Sonne'...");
-    const searchResult = await searchTrack("Rammstein Sonne", 2);
+const app = express();
+const PORT = 3000;
 
-    const tracks = searchResult.tracks.items;
-    console.log(
-      "Found tracks:",
-      tracks.map((t) => `${t.name} – ${t.artists[0].name}`)
-    );
+const ARTIST_TO_UNLIKE = "";
 
-    if (tracks.length === 0) {
-      console.log("No tracks found, aborting.");
-      return;
-    }
+app.get("/", (req, res) => {
+  res.send(`
+    <h1>Spotify Liked Songs Tool</h1>
+    <p>Schritt 1: <a href="/login">Spotify Login starten</a></p>
+  `);
+});
 
-    // Take artist from first track
-    const firstArtistId = tracks[0].artists[0].id;
 
-    console.log("\n2) Fetching artist details for first track's artist...");
-    const artist = await getArtist(firstArtistId);
+app.get("/login", (req, res) => {
+  console.log("➡️  Schritt 1: Redirect zu Spotify Login");
+  const url = getAuthUrl();
+  res.redirect(url);
+});
 
-    console.log("Artist name:", artist.name);
-    console.log("Followers:", artist.followers.total);
-    console.log("Genres:", artist.genres.join(", "));
 
-    // Next sequential call example: get that artist's top tracks
-    console.log("\n3) Fetching artist top tracks (CH market)...");
-    const topTracksRes = await fetchArtistTopTracks(firstArtistId, "CH");
+app.get("/callback", async (req, res) => {
+  const code = req.query.code;
 
-    console.log(
-      "Top tracks:",
-      topTracksRes.tracks.map((t) => `${t.name} (${t.popularity})`)
-    );
-
-    console.log("\nDone 🎧");
-  } catch (err) {
-    console.error("Error while calling Spotify:", err.response?.data || err);
+  if (!code) {
+    return res.status(400).send("Kein 'code' von Spotify erhalten");
   }
-}
 
-// simple helper in same file:
-import { spotifyGet } from "./spotifyClient.js";
+  try {
+    console.log("🎵 Schritt 3: Hole alle Liked Songs...");
+    const tracks = await fetchAllLikedTracks(accessToken);
 
-async function fetchArtistTopTracks(artistId, market = "CH") {
-  return spotifyGet(`/artists/${artistId}/top-tracks`, { market });
-}
+    console.log(`🔍 Filtere alle '${ARTIST_TO_UNLIKE}' Songs…`);
+    const blockedTracks = tracks.filter(track =>
+      track.artists.some(a => a.name.toLowerCase() === ARTIST_TO_UNLIKE)
+    );
 
-main();
+    console.log(`Gefunden: ${blockedTracks.length} zu löschende Songs`);
+    const blockedIds = blockedTracks.map(t => t.id);
+
+    console.log("🗑️ Lösche aus deiner Spotify Bibliothek…");
+    await unlikeTracks(accessToken, blockedIds);
+
+    console.log("✅ Fertig – alle unerwünschten Songs wurden entfernt!");
+  } catch (err) {
+    console.error("Fehler im Callback:", err.response?.data || err);
+    res.status(500).send("Fehler beim Abrufen der Liked Songs.");
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`Server läuft auf http://localhost:${PORT}`);
+  console.log(
+    `Ablauf:\n 1) Öffne http://localhost:${PORT}\n 2) Klick auf "Spotify Login starten"`
+  );
+});
