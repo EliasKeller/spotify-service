@@ -17,5 +17,9 @@
   "bugs": {
     "url": "https://github.com/EliasKeller/spotify-service/issues"
   },
-  "homepage": "https://github.com/EliasKeller/spotify-service#readme"
+  "homepage": "https://github.com/EliasKeller/spotify-service#readme",
+  "dependencies": {
+    "axios": "^1.13.2",
+    "dotenv": "^17.2.3"
+  }
 }
